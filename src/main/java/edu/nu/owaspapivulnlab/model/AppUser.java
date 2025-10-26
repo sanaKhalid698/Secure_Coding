@@ -18,9 +18,13 @@ public class AppUser {
     @NotBlank
     private String password;
 
-    // VULNERABILITY(API6: Mass Assignment): role and isAdmin are bindable via incoming JSON
-    private String role;   // e.g., "USER" or "ADMIN"
-    private boolean isAdmin;
+    // FIXED(API6: Mass Assignment): role and isAdmin are no longer directly modifiable via JSON.
+    // Marked as read-only to prevent privilege escalation from client input.
+    @Column(updatable = false, insertable = false)
+    private String role = "USER";   // default role
+
+    @Column(updatable = false, insertable = false)
+    private boolean isAdmin = false;
 
     @Email
     private String email;
