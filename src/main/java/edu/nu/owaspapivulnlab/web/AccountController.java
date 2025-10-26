@@ -93,11 +93,28 @@ public class AccountController {
         return ResponseEntity.ok(response);
     }
 
-    // still leaks more than needed
     @GetMapping("/mine")
-    public Object mine(Authentication auth) {
-        AppUser me = users.findByUsername(auth != null ? auth.getName() : "anonymous")
-                           .orElse(null);
-        return me == null ? Collections.emptyList() : accounts.findByOwnerUserId(me.getId());
+    public ResponseEntity<?> mine(Authentication auth) {
+        if (auth == null || auth.getName() == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                                .body("User not authenticated.");
+        }
+
+        AppUser me = users.findByUsername(auth.getName())
+                        .orElseThrow(() -> new RuntimeException("Authenticated user not found"));
+
+        // Return only safe account details
+        var safeAccounts = accounts.findByOwnerUserId(me.getId()).stream()
+                .map(a -> {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("id", a.getId());
+                    map.put("balance", a.getBalance());
+                    map.put("name", a.getName()); // or other non-sensitive fields
+                    return map;
+                })
+                .toList();
+
+        return ResponseEntity.ok(safeAccounts);
     }
+
 }
