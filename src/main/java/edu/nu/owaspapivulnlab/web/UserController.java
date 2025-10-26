@@ -50,16 +50,54 @@ public class UserController {
     }
 
 
-    // VULNERABILITY(API6: Mass Assignment) - binds role/isAdmin from client
+        // FIXED(API6: Mass Assignment): only allows safe fields to be set by client
     @PostMapping
     public AppUser create(@Valid @RequestBody AppUser body) {
-        return users.save(body);
+        AppUser newUser = new AppUser();
+        newUser.setUsername(body.getUsername());
+        newUser.setPassword(body.getPassword());
+        newUser.setEmail(body.getEmail());
+
+        // role and isAdmin are now assigned securely, not from client input
+        newUser.setRole("USER");
+        newUser.setAdmin(false);
+
+        return users.save(newUser);
     }
 
-    // VULNERABILITY(API9: Improper Inventory + API8 Injection style): naive 'search' that can be abused for enumeration
+
+    // FIXED(API9: Improper Inventory Management + Injection Prevention)
     @GetMapping("/search")
-    public List<AppUser> search(@RequestParam String q) {
-        return users.search(q);
+    public ResponseEntity<?> search(@RequestParam String q, Authentication auth) {
+        // 1. Require authentication
+        if (auth == null || auth.getName() == null) {
+            return ResponseEntity.status(401).body("Unauthorized: Please log in first.");
+        }
+
+        // 2. Allow only admin users to perform global searches
+        AppUser currentUser = users.findByUsername(auth.getName())
+                .orElseThrow(() -> new RuntimeException("Authenticated user not found"));
+
+        if (!"ADMIN".equalsIgnoreCase(currentUser.getRole())) {
+            return ResponseEntity.status(403).body("Access denied: Only admins can search user data.");
+        }
+
+        // 3. Perform safe parameterized search (protected in repository)
+        List<AppUser> result = users.search(q);
+
+        // 4. Return only safe fields (no sensitive info)
+        List<Map<String, Object>> safeResults = result.stream()
+                .map(u -> {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("id", u.getId());
+                    map.put("username", u.getUsername());
+                    map.put("email", u.getEmail());
+                    map.put("role", u.getRole());
+                    return map;
+                })
+                .toList();
+
+        return ResponseEntity.ok(safeResults);
     }
 
     // VULNERABILITY(API3: Excessive Data Exposure) - returns all users including sensitive fields
