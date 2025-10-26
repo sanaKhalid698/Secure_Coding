@@ -43,7 +43,7 @@ public class UserController {
         }
 
         // Return safe user details (exclude sensitive info if needed)
-        // Optional: mask password or private fields
+     
         targetUser.setPassword(null); // prevent leaking password hash
 
         return ResponseEntity.ok(targetUser);
@@ -63,10 +63,37 @@ public class UserController {
     }
 
     // VULNERABILITY(API3: Excessive Data Exposure) - returns all users including sensitive fields
+    // FIXED: API3 (Excessive Data Exposure) - Limit data exposure and restrict access
     @GetMapping
-    public List<AppUser> list() {
-        return users.findAll();
+    public ResponseEntity<?> list(Authentication auth) {
+        // Ensure only admins can view the full user list
+        if (auth == null || auth.getName() == null) {
+            return ResponseEntity.status(401).body("Unauthorized: Please log in first.");
+        }
+
+        AppUser me = users.findByUsername(auth.getName())
+                        .orElseThrow(() -> new RuntimeException("Authenticated user not found"));
+
+        if (!"ADMIN".equalsIgnoreCase(me.getRole())) {
+            return ResponseEntity.status(403).body("Access denied: Only admins can view all users.");
+        }
+
+        // Return only non-sensitive user info (no passwords or private fields)
+        List<Map<String, Object>> safeUsers = users.findAll().stream()
+                .map(u -> {
+                    Map<String, Object> safeUser = new HashMap<>();
+                    safeUser.put("id", u.getId());
+                    safeUser.put("username", u.getUsername());
+                    safeUser.put("role", u.getRole());
+                    // Add only necessary, non-sensitive fields
+                    return safeUser;
+                })
+                .toList();
+
+        // Return filtered and authorized response
+        return ResponseEntity.ok(safeUsers);
     }
+
 
     // VULNERABILITY(API5: Broken Function Level Authorization) - allows regular users to delete anyone
     @DeleteMapping("/{id}")
