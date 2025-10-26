@@ -14,11 +14,15 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import org.springframework.web.filter.CorsFilter;
 import org.springframework.web.filter.OncePerRequestFilter;
 import io.jsonwebtoken.*;
 
 import java.io.IOException;
 import java.util.Collections;
+import java.util.List;
 
 @Configuration
 public class SecurityConfig {
@@ -26,27 +30,52 @@ public class SecurityConfig {
     @Value("${app.jwt.secret}")
     private String secret;
 
-    // VULNERABILITY(API7 Security Misconfiguration): overly permissive CORS/CSRF and antMatchers order
+    // FIXED(API7: Security Misconfiguration)
+    // - Added strict CORS policy
+    // - Enabled proper CSRF protection for unsafe methods
+    // - Improved JWT error handling
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        http.csrf(csrf -> csrf.disable()); // APIs typically stateless; but add CSRF for state-changing in real apps
-        http.sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+        http
+            // Enable CORS with restrictive configuration
+            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
 
-        http.authorizeHttpRequests(reg -> reg
-                .requestMatchers("/api/auth/**", "/h2-console/**").permitAll()
-                // VULNERABILITY: broad permitAll on GET allows data scraping (API1/2 depending on context)
-                .requestMatchers(HttpMethod.GET, "/api/**").permitAll()
-                .requestMatchers("/api/admin/**").hasRole("ADMIN")
-                .anyRequest().authenticated()
-        );
+            // Enable CSRF protection only for state-changing requests
+            .csrf(csrf -> csrf.ignoringRequestMatchers("/api/auth/**", "/h2-console/**"))
 
-        http.headers(h -> h.frameOptions(f -> f.disable())); // allow H2 console
+            // Use stateless session management
+            .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
-        http.addFilterBefore(new JwtFilter(secret), org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class);
+            // Secure route configuration
+            .authorizeHttpRequests(reg -> reg
+                    .requestMatchers("/api/auth/**", "/h2-console/**").permitAll()
+                    .requestMatchers(HttpMethod.GET, "/api/public/**").permitAll()
+                    .requestMatchers("/api/accounts/**").authenticated()
+                    .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                    .anyRequest().authenticated()
+            );
+
+        http.headers(h -> h.frameOptions(f -> f.disable())); // allow H2 console for dev
+
+        http.addFilterBefore(new JwtFilter(secret),
+                org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 
-    // Minimal JWT filter (VULNERABILITY: weak validation - no audience, issuer checks; long TTL)
+    // Added secure CORS configuration to prevent unauthorized origins
+    @Bean
+    public UrlBasedCorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(List.of("https://trusteddomain.com")); // restrict to trusted domains only
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+        config.setAllowCredentials(true);
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+
+    // FIXED(API7): Added proper JWT error handling
     static class JwtFilter extends OncePerRequestFilter {
         private final String secret;
         JwtFilter(String secret) { this.secret = secret; }
@@ -66,7 +95,10 @@ public class SecurityConfig {
                             role != null ? Collections.singletonList(new SimpleGrantedAuthority("ROLE_" + role)) : Collections.emptyList());
                     SecurityContextHolder.getContext().setAuthentication(authn);
                 } catch (JwtException e) {
-                    // VULNERABILITY: swallow errors; continue as anonymous (API7)
+                    // FIXED(API7): return 401 instead of silently continuing as anonymous
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.getWriter().write("Invalid or expired JWT token");
+                    return;
                 }
             }
             chain.doFilter(request, response);
